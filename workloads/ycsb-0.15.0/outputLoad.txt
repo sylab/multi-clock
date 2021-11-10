@@ -1,0 +1,20 @@
+com.yahoo.ycsb.DBException: java.lang.NullPointerException
+	at com.yahoo.ycsb.db.MemcachedClient.init(MemcachedClient.java:133)
+	at com.yahoo.ycsb.DBWrapper.init(DBWrapper.java:86)
+	at com.yahoo.ycsb.ClientThread.run(Client.java:424)
+	at java.lang.Thread.run(Thread.java:748)
+Caused by: java.lang.NullPointerException
+	at com.yahoo.ycsb.db.MemcachedClient.createMemcachedClient(MemcachedClient.java:165)
+	at com.yahoo.ycsb.db.MemcachedClient.init(MemcachedClient.java:122)
+	... 3 more
+[OVERALL], RunTime(ms), 7
+[OVERALL], Throughput(ops/sec), 0.0
+[TOTAL_GCS_PS_Scavenge], Count, 0
+[TOTAL_GC_TIME_PS_Scavenge], Time(ms), 0
+[TOTAL_GC_TIME_%_PS_Scavenge], Time(%), 0.0
+[TOTAL_GCS_PS_MarkSweep], Count, 0
+[TOTAL_GC_TIME_PS_MarkSweep], Time(ms), 0
+[TOTAL_GC_TIME_%_PS_MarkSweep], Time(%), 0.0
+[TOTAL_GCs], Count, 0
+[TOTAL_GC_TIME], Time(ms), 0
+[TOTAL_GC_TIME_%], Time(%), 0.0
