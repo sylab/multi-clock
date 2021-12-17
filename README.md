@@ -14,3 +14,10 @@ Following are the other required configurations need to be eanbled for MULTI-CLO
   - `KMEM DAX: volatile-use of persistent memory`
 
 Now, build and install the kernel using `make && make modules_install && make install`
+
+# Install required packages
+
+- IPMCTL 
+  - Installation: https://docs.pmem.io/ipmctl-user-guide/installing-ipmctl/installing-ipmctl-packages-on-linux
+- NDCTL
+  - Installation: https://docs.pmem.io/ndctl-user-guide/installing-ndctl/installing-ndctl-packages-on-linux
