@@ -1,0 +1,1270 @@
+Only in linux-5.3.1/arch/m68k/hp300: hp300map.map
+Only in linux-5.3.1/Documentation/fb: viafb.modes
+diff -ur linux-5.3.1/drivers/base/node.c multi-clock/drivers/base/node.c
+--- linux-5.3.1/drivers/base/node.c	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/drivers/base/node.c	2021-12-17 13:47:41.820683783 -0500
+@@ -978,7 +978,11 @@
+ #ifdef CONFIG_HIGHMEM
+ 	[N_HIGH_MEMORY] = _NODE_ATTR(has_high_memory, N_HIGH_MEMORY),
+ #endif
+-	[N_MEMORY] = _NODE_ATTR(has_memory, N_MEMORY),
++/*
++#ifdef CONFIG_MULTICLOCK
++        [N_HIGH_MEMORY] = _NODE_ATTR(has_persistent_memory, N_PERSISTENT_MEMORY),
++#endif
++*/	[N_MEMORY] = _NODE_ATTR(has_memory, N_MEMORY),
+ 	[N_CPU] = _NODE_ATTR(has_cpu, N_CPU),
+ };
+ 
+diff -ur linux-5.3.1/drivers/dax/kmem.c multi-clock/drivers/dax/kmem.c
+--- linux-5.3.1/drivers/dax/kmem.c	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/drivers/dax/kmem.c	2021-12-17 13:47:41.927684013 -0500
+@@ -64,15 +64,25 @@
+ 	 */
+ 	new_res->flags = IORESOURCE_SYSTEM_RAM;
+ 	new_res->name = dev_name(dev);
++#ifdef CONFIG_MULTICLOCK
++        set_pmem_node_id(numa_node);
++#endif
+ 
+ 	rc = add_memory(numa_node, new_res->start, resource_size(new_res));
+ 	if (rc) {
+ 		release_resource(new_res);
+ 		kfree(new_res);
++#ifdef CONFIG_MULTICLOCK
++        set_pmem_node_id(-1);
++#endif
+ 		return rc;
+ 	}
++#ifdef CONFIG_MULTICLOCK
++        set_pmem_node(numa_node);
++#endif
+ 	dev_dax->dax_kmem_res = new_res;
+ 
++
+ 	return 0;
+ }
+ 
+Only in linux-5.3.1/drivers/s390/char: defkeymap.map
+Only in linux-5.3.1/drivers/staging/speakup: speakupmap.map
+Only in linux-5.3.1/drivers/tty/vt: defkeymap.map
+diff -ur linux-5.3.1/include/linux/gfp.h multi-clock/include/linux/gfp.h
+--- linux-5.3.1/include/linux/gfp.h	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/include/linux/gfp.h	2021-12-17 13:47:43.883688212 -0500
+@@ -44,6 +44,12 @@
+ #else
+ #define ___GFP_NOLOCKDEP	0
+ #endif
++
++#ifdef CONFIG_MULTICLOCK
++#define ___GFP_PMEM 		0x1000000u
++#else
++#define ___GFP_PMEM             0
++#endif
+ /* If the above are modified, __GFP_BITS_SHIFT may need updating */
+ 
+ /*
+@@ -215,9 +221,10 @@
+ 
+ /* Disable lockdep for GFP context tracking */
+ #define __GFP_NOLOCKDEP ((__force gfp_t)___GFP_NOLOCKDEP)
++#define __GFP_PMEM ((__force gfp_t)___GFP_PMEM)
+ 
+ /* Room for N __GFP_FOO bits */
+-#define __GFP_BITS_SHIFT (23 + IS_ENABLED(CONFIG_LOCKDEP))
++#define __GFP_BITS_SHIFT (23 + IS_ENABLED(CONFIG_LOCKDEP + IS_ENABLED(CONFIG_MULTICLOCK)))
+ #define __GFP_BITS_MASK ((__force gfp_t)((1 << __GFP_BITS_SHIFT) - 1))
+ 
+ /**
+diff -ur linux-5.3.1/include/linux/mm.h multi-clock/include/linux/mm.h
+--- linux-5.3.1/include/linux/mm.h	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/include/linux/mm.h	2021-12-17 13:47:43.910688270 -0500
+@@ -94,6 +94,11 @@
+ extern const int mmap_rnd_compat_bits_max;
+ extern int mmap_rnd_compat_bits __read_mostly;
+ #endif
++#ifdef CONFIG_MULTICLOCK
++extern int pmem_node_id;
++int set_pmem_node_id(int nid);
++int set_pmem_node(int nid);
++#endif
+ 
+ #include <asm/page.h>
+ #include <asm/pgtable.h>
+@@ -219,6 +224,7 @@
+ #define PAGE_ALIGNED(addr)	IS_ALIGNED((unsigned long)(addr), PAGE_SIZE)
+ 
+ #define lru_to_page(head) (list_entry((head)->prev, struct page, lru))
++#define lru_to_page_next(head) (list_entry((head)->next, struct page, lru))
+ 
+ /*
+  * Linux kernel virtual memory manager primitives.
+diff -ur linux-5.3.1/include/linux/mm_inline.h multi-clock/include/linux/mm_inline.h
+--- linux-5.3.1/include/linux/mm_inline.h	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/include/linux/mm_inline.h	2021-12-17 13:47:43.910688270 -0500
+@@ -100,6 +100,7 @@
+ 			__ClearPageActive(page);
+ 			lru += LRU_ACTIVE;
+ 		}
++
+ 	}
+ 	return lru;
+ }
+@@ -119,8 +120,15 @@
+ 		lru = LRU_UNEVICTABLE;
+ 	else {
+ 		lru = page_lru_base_type(page);
+-		if (PageActive(page))
++#ifdef CONFIG_MULTICLOCK
++		if(PagePromote(page))
++			lru += LRU_PROMOTE;
++		else if (PageActive(page))
+ 			lru += LRU_ACTIVE;
++#else
++		if (PageActive(page))
++                         lru += LRU_ACTIVE;
++#endif
+ 	}
+ 	return lru;
+ }
+diff -ur linux-5.3.1/include/linux/mmzone.h multi-clock/include/linux/mmzone.h
+--- linux-5.3.1/include/linux/mmzone.h	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/include/linux/mmzone.h	2021-12-17 13:47:43.911688272 -0500
+@@ -193,8 +193,14 @@
+ 	NR_ZONE_LRU_BASE, /* Used only for compaction and reclaim retry */
+ 	NR_ZONE_INACTIVE_ANON = NR_ZONE_LRU_BASE,
+ 	NR_ZONE_ACTIVE_ANON,
++#ifdef CONFIG_MULTICLOCK
++	NR_ZONE_PROMOTE_ANON,
++#endif
+ 	NR_ZONE_INACTIVE_FILE,
+ 	NR_ZONE_ACTIVE_FILE,
++#ifdef CONFIG_MULTICLOCK
++	NR_ZONE_PROMOTE_FILE,
++#endif
+ 	NR_ZONE_UNEVICTABLE,
+ 	NR_ZONE_WRITE_PENDING,	/* Count of dirty, writeback and unstable pages */
+ 	NR_MLOCK,		/* mlock()ed pages found and moved off LRU */
+@@ -211,9 +217,15 @@
+ enum node_stat_item {
+ 	NR_LRU_BASE,
+ 	NR_INACTIVE_ANON = NR_LRU_BASE, /* must match order of LRU_[IN]ACTIVE */
+-	NR_ACTIVE_ANON,		/*  "     "     "   "       "         */
++	NR_ACTIVE_ANON,	/*  "     "     "   "       "         */
++#ifdef CONFIG_MULTICLOCK	
++	NR_PROMOTE_ANON,
++#endif
+ 	NR_INACTIVE_FILE,	/*  "     "     "   "       "         */
+ 	NR_ACTIVE_FILE,		/*  "     "     "   "       "         */
++#ifdef CONFIG_MULTICLOCK	
++	NR_PROMOTE_FILE,
++#endif
+ 	NR_UNEVICTABLE,		/*  "     "     "   "       "         */
+ 	NR_SLAB_RECLAIMABLE,	/* Please do not reorder this item */
+ 	NR_SLAB_UNRECLAIMABLE,	/* and this one without looking at
+@@ -241,6 +253,10 @@
+ 	NR_VMSCAN_IMMEDIATE,	/* Prioritise for reclaim when writeback ends */
+ 	NR_DIRTIED,		/* page dirtyings since bootup */
+ 	NR_WRITTEN,		/* page writings since bootup */
++#ifdef CONFIG_MULTICLOCK	
++	NR_DEMOTED,
++	NR_PROMOTED,
++#endif
+ 	NR_KERNEL_MISC_RECLAIMABLE,	/* reclaimable non-slab kernel pages */
+ 	NR_VM_NODE_STAT_ITEMS
+ };
+@@ -256,24 +272,44 @@
+  */
+ #define LRU_BASE 0
+ #define LRU_ACTIVE 1
++
++#ifdef CONFIG_MULTICLOCK
++#define LRU_PROMOTE 2
++#define LRU_FILE 3
++#else
+ #define LRU_FILE 2
++#endif
+ 
+ enum lru_list {
+ 	LRU_INACTIVE_ANON = LRU_BASE,
+ 	LRU_ACTIVE_ANON = LRU_BASE + LRU_ACTIVE,
++#ifdef CONFIG_MULTICLOCK
++        LRU_PROMOTE_ANON = LRU_BASE + LRU_PROMOTE,
++#endif
+ 	LRU_INACTIVE_FILE = LRU_BASE + LRU_FILE,
+ 	LRU_ACTIVE_FILE = LRU_BASE + LRU_FILE + LRU_ACTIVE,
++#ifdef CONFIG_MULTICLOCK
++        LRU_PROMOTE_FILE = LRU_BASE + LRU_FILE + LRU_PROMOTE,
++#endif
+ 	LRU_UNEVICTABLE,
+ 	NR_LRU_LISTS
+ };
+ 
+ #define for_each_lru(lru) for (lru = 0; lru < NR_LRU_LISTS; lru++)
+ 
++#ifdef CONFIG_MULTICLOCK
++#define for_each_evictable_lru(lru) for (lru = 0; lru <= LRU_PROMOTE_FILE; lru++)
++#else
+ #define for_each_evictable_lru(lru) for (lru = 0; lru <= LRU_ACTIVE_FILE; lru++)
++#endif
+ 
+ static inline int is_file_lru(enum lru_list lru)
+ {
++#ifdef CONFIG_MULTICLOCK
++        return (lru == LRU_INACTIVE_FILE || lru == LRU_ACTIVE_FILE || lru == LRU_PROMOTE_FILE);
++#else
+ 	return (lru == LRU_INACTIVE_FILE || lru == LRU_ACTIVE_FILE);
++#endif
+ }
+ 
+ static inline int is_active_lru(enum lru_list lru)
+@@ -281,6 +317,13 @@
+ 	return (lru == LRU_ACTIVE_ANON || lru == LRU_ACTIVE_FILE);
+ }
+ 
++#ifdef CONFIG_MULTICLOCK
++static inline int is_promote_lru(enum lru_list lru)
++{
++        return (lru == LRU_PROMOTE_ANON || lru == LRU_PROMOTE_FILE);
++}
++#endif
++
+ struct zone_reclaim_stat {
+ 	/*
+ 	 * The pageout code in vmscan.c keeps track of how many of the
+@@ -313,6 +356,10 @@
+ /* Isolate unevictable pages */
+ #define ISOLATE_UNEVICTABLE	((__force isolate_mode_t)0x8)
+ 
++#ifdef CONFIG_MULTICLOCK
++#define ISOLATE_PROMOTE         ((__force isolate_mode_t)0x16)
++#endif
++
+ /* LRU Isolation modes. */
+ typedef unsigned __bitwise isolate_mode_t;
+ 
+@@ -718,6 +765,11 @@
+ 	wait_queue_head_t pfmemalloc_wait;
+ 	struct task_struct *kswapd;	/* Protected by
+ 					   mem_hotplug_begin/end() */
++#ifdef CONFIG_MULTICLOCK
++	wait_queue_head_t kpromoted_wait;
++	struct task_struct *kpromoted;
++	int pm_node;
++#endif
+ 	int kswapd_order;
+ 	enum zone_type kswapd_classzone_idx;
+ 
+diff -ur linux-5.3.1/include/linux/nodemask.h multi-clock/include/linux/nodemask.h
+--- linux-5.3.1/include/linux/nodemask.h	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/include/linux/nodemask.h	2021-12-17 13:47:43.916688283 -0500
+@@ -397,7 +397,13 @@
+ #else
+ 	N_HIGH_MEMORY = N_NORMAL_MEMORY,
+ #endif
+-	N_MEMORY,		/* The node has memory(regular, high, movable) */
++/*
++#ifdef CONFIG_MULTICLOCK
++	N_PERSISTENT_MEMORY,
++#else
++	N_PERSISTENT_MEMORY = N_NORMAL_MEMORY,
++#endif
++*/	N_MEMORY,		/* The node has memory(regular, high, movable) */
+ 	N_CPU,		/* The node has one or more cpus */
+ 	NR_NODE_STATES
+ };
+diff -ur linux-5.3.1/include/linux/page-flags.h multi-clock/include/linux/page-flags.h
+--- linux-5.3.1/include/linux/page-flags.h	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/include/linux/page-flags.h	2021-12-17 13:47:43.918688287 -0500
+@@ -131,6 +131,9 @@
+ 	PG_young,
+ 	PG_idle,
+ #endif
++#ifdef CONFIG_MULTICLOCK
++        PG_promote,
++#endif
+ 	__NR_PAGEFLAGS,
+ 
+ 	/* Filesystems */
+@@ -341,6 +344,11 @@
+ 	__CLEARPAGEFLAG(SwapBacked, swapbacked, PF_NO_TAIL)
+ 	__SETPAGEFLAG(SwapBacked, swapbacked, PF_NO_TAIL)
+ 
++#ifdef CONFIG_MULTICLOCK
++PAGEFLAG(Promote, promote, PF_HEAD) __CLEARPAGEFLAG(Promote, promote, PF_HEAD)
++        TESTCLEARFLAG(Promote, promote, PF_HEAD)
++#endif
++
+ /*
+  * Private page markings that may be used by the filesystem that owns the page
+  * for its own purposes.
+@@ -806,12 +814,23 @@
+  * Flags checked when a page is freed.  Pages being freed should not have
+  * these flags set.  It they are, there is a problem.
+  */
+-#define PAGE_FLAGS_CHECK_AT_FREE				\
+-	(1UL << PG_lru		| 1UL << PG_locked	|	\
+-	 1UL << PG_private	| 1UL << PG_private_2	|	\
+-	 1UL << PG_writeback	| 1UL << PG_reserved	|	\
+-	 1UL << PG_slab		| 1UL << PG_active 	|	\
+-	 1UL << PG_unevictable	| __PG_MLOCKED)
++
++#ifdef CONFIG_MULTICLOCK
++#define PAGE_FLAGS_CHECK_AT_FREE                                \
++        (1UL << PG_lru          | 1UL << PG_locked      |       \
++         1UL << PG_private      | 1UL << PG_private_2   |       \
++         1UL << PG_writeback    | 1UL << PG_reserved    |       \
++         1UL << PG_slab         | 1UL << PG_active      |       \
++         1UL << PG_unevictable  | 1UL << PG_promote     |       \
++         __PG_MLOCKED)
++#else
++#define PAGE_FLAGS_CHECK_AT_FREE                                \
++        (1UL << PG_lru          | 1UL << PG_locked      |       \
++         1UL << PG_private      | 1UL << PG_private_2   |       \
++         1UL << PG_writeback    | 1UL << PG_reserved    |       \
++         1UL << PG_slab         | 1UL << PG_active      |       \
++         1UL << PG_unevictable  | __PG_MLOCKED)
++#endif
+ 
+ /*
+  * Flags checked when a page is prepped for return by the page allocator.
+diff -ur linux-5.3.1/include/trace/events/mmflags.h multi-clock/include/trace/events/mmflags.h
+--- linux-5.3.1/include/trace/events/mmflags.h	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/include/trace/events/mmflags.h	2021-12-17 13:47:43.988688438 -0500
+@@ -79,6 +79,12 @@
+ #define IF_HAVE_PG_IDLE(flag,string)
+ #endif
+ 
++#ifdef CONFIG_MULTICLOCK
++#define IF_HAVE_PG_PROMOTE(flag,string) ,{1UL << flag, string}
++#else
++#define IF_HAVE_PG_PROMOTE(flag,string)
++#endif
++
+ #define __def_pageflag_names						\
+ 	{1UL << PG_locked,		"locked"	},		\
+ 	{1UL << PG_waiters,		"waiters"	},		\
+@@ -105,7 +111,8 @@
+ IF_HAVE_PG_UNCACHED(PG_uncached,	"uncached"	)		\
+ IF_HAVE_PG_HWPOISON(PG_hwpoison,	"hwpoison"	)		\
+ IF_HAVE_PG_IDLE(PG_young,		"young"		)		\
+-IF_HAVE_PG_IDLE(PG_idle,		"idle"		)
++IF_HAVE_PG_IDLE(PG_idle,		"idle"		)		\
++IF_HAVE_PG_PROMOTE(PG_promote,          "promote"       )
+ 
+ #define show_page_flags(flags)						\
+ 	(flags) ? __print_flags(flags, "|",				\
+diff -ur linux-5.3.1/Makefile multi-clock/Makefile
+--- linux-5.3.1/Makefile	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/Makefile	2021-12-17 13:47:41.200682452 -0500
+@@ -2,8 +2,8 @@
+ VERSION = 5
+ PATCHLEVEL = 3
+ SUBLEVEL = 1
+-EXTRAVERSION =
+-NAME = Bobtail Squid
++EXTRAVERSION = -multiclock
++NAME = Bobtail Squid with Multiclock No Log
+ 
+ # *DOCUMENTATION*
+ # To see a list of typical targets execute "make help"
+diff -ur linux-5.3.1/mm/Kconfig multi-clock/mm/Kconfig
+--- linux-5.3.1/mm/Kconfig	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/mm/Kconfig	2021-12-17 13:47:44.084688644 -0500
+@@ -675,6 +675,9 @@
+ config DEV_PAGEMAP_OPS
+ 	bool
+ 
++config MULTICLOCK
++	bool "Enable Multi-Clock for Tiered Memory System"
++
+ config HMM_MIRROR
+ 	bool "HMM mirror CPU page table into a device page table"
+ 	depends on (X86_64 || PPC64)
+diff -ur linux-5.3.1/mm/memcontrol.c multi-clock/mm/memcontrol.c
+--- linux-5.3.1/mm/memcontrol.c	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/mm/memcontrol.c	2021-12-17 13:47:44.089688654 -0500
+@@ -96,8 +96,14 @@
+ static const char *const mem_cgroup_lru_names[] = {
+ 	"inactive_anon",
+ 	"active_anon",
++#ifdef CONFIG_MULTICLOCK
++        "promote_anon",
++#endif
+ 	"inactive_file",
+ 	"active_file",
++#ifdef CONFIG_MULTICLOCK
++        "promote_file",
++#endif
+ 	"unevictable",
+ };
+ 
+@@ -1293,12 +1299,14 @@
+ 		*lru_size += nr_pages;
+ 
+ 	size = *lru_size;
+-	if (WARN_ONCE(size < 0,
++	/*if (WARN_ONCE(size < 0,
+ 		"%s(%p, %d, %d): lru_size %ld\n",
+ 		__func__, lruvec, lru, nr_pages, size)) {
+ 		VM_BUG_ON(1);
+ 		*lru_size = 0;
+-	}
++	}*/
++	if(size<0)
++		*lru_size = 0;
+ 
+ 	if (nr_pages > 0)
+ 		*lru_size += nr_pages;
+diff -ur linux-5.3.1/mm/migrate.c multi-clock/mm/migrate.c
+--- linux-5.3.1/mm/migrate.c	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/mm/migrate.c	2021-12-17 13:47:44.090688657 -0500
+@@ -1179,6 +1179,7 @@
+ 	if (page_count(page) == 1) {
+ 		/* page was freed from under us. So we are done. */
+ 		ClearPageActive(page);
++		//ClearPagePromote(page);
+ 		ClearPageUnevictable(page);
+ 		if (unlikely(__PageMovable(page))) {
+ 			lock_page(page);
+diff -ur linux-5.3.1/mm/page_alloc.c multi-clock/mm/page_alloc.c
+--- linux-5.3.1/mm/page_alloc.c	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/mm/page_alloc.c	2021-12-17 13:47:44.092688661 -0500
+@@ -75,6 +75,7 @@
+ #include "internal.h"
+ #include "shuffle.h"
+ 
++
+ /* prevent >1 _updater_ of zone percpu pageset ->high and ->batch fields */
+ static DEFINE_MUTEX(pcp_batch_high_lock);
+ #define MIN_PERCPU_PAGELIST_FRACTION	(8)
+@@ -122,7 +123,11 @@
+ #ifdef CONFIG_HIGHMEM
+ 	[N_HIGH_MEMORY] = { { [0] = 1UL } },
+ #endif
+-	[N_MEMORY] = { { [0] = 1UL } },
++/*
++#ifdef CONFIG_MULTICLOCK
++        N_PERSISTENT_MEMORY = { { [0] = 1UL } },
++#endif
++*/	[N_MEMORY] = { { [0] = 1UL } },
+ 	[N_CPU] = { { [0] = 1UL } },
+ #endif	/* NUMA */
+ };
+@@ -4674,6 +4679,7 @@
+ 	 */
+ 	ac->preferred_zoneref = first_zones_zonelist(ac->zonelist,
+ 					ac->high_zoneidx, ac->nodemask);
++
+ }
+ 
+ /*
+@@ -4684,6 +4690,8 @@
+ 							nodemask_t *nodemask)
+ {
+ 	struct page *page;
++	nodemask_t nodemask_test;
++	int nid;
+ 	unsigned int alloc_flags = ALLOC_WMARK_LOW;
+ 	gfp_t alloc_mask; /* The gfp_t that was actually used for allocation */
+ 	struct alloc_context ac = { };
+@@ -4692,6 +4700,37 @@
+ 	 * There are several places where we assume that the order value is sane
+ 	 * so bail out early if the request is out of bound.
+ 	 */
++#ifdef CONFIG_MULTICLOCK
++
++	if((gfp_mask & __GFP_PMEM)!=0)
++	{
++		for_each_node_state(nid, N_MEMORY)
++                {
++                        if(NODE_DATA(nid)->pm_node!=0)
++                                node_set(nid, nodemask_test);
++                        else
++                                node_clear(nid, nodemask_test);
++                }
++
++                nodemask = &nodemask_test;
++	}
++
++	else if((gfp_mask & __GFP_PMEM)==0 && pmem_node_id!=-1)
++        {
++		
++		for_each_node_state(nid, N_MEMORY)
++		{
++    			if(NODE_DATA(nid)->pm_node==0)
++            			node_set(nid, nodemask_test);
++    			else
++            			node_clear(nid, nodemask_test);
++		}
++
++		nodemask = &nodemask_test;
++        }
++
++#endif	
++
+ 	if (unlikely(order >= MAX_ORDER)) {
+ 		WARN_ON_ONCE(!(gfp_mask & __GFP_NOWARN));
+ 		return NULL;
+@@ -4701,7 +4740,8 @@
+ 	alloc_mask = gfp_mask;
+ 	if (!prepare_alloc_pages(gfp_mask, order, preferred_nid, nodemask, &ac, &alloc_mask, &alloc_flags))
+ 		return NULL;
+-
++	
++	//node_clear(pmem_node_id, ac->nodemask);
+ 	finalise_ac(gfp_mask, &ac);
+ 
+ 	/*
+@@ -6663,6 +6703,9 @@
+ 	pgdat_init_kcompactd(pgdat);
+ 
+ 	init_waitqueue_head(&pgdat->kswapd_wait);
++#ifdef CONFIG_MULTICLOCK
++	init_waitqueue_head(&pgdat->kpromoted_wait);
++#endif
+ 	init_waitqueue_head(&pgdat->pfmemalloc_wait);
+ 
+ 	pgdat_page_ext_init(pgdat);
+diff -ur linux-5.3.1/mm/swap.c multi-clock/mm/swap.c
+--- linux-5.3.1/mm/swap.c	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/mm/swap.c	2021-12-17 13:47:44.095688667 -0500
+@@ -287,6 +287,20 @@
+ 		__count_vm_event(PGACTIVATE);
+ 		update_page_reclaim_stat(lruvec, file, 1);
+ 	}
++
++#ifdef CONFIG_MULTICLOCK
++        else if (PageLRU(page) && PageActive(page) && !PageUnevictable(page) && NODE_DATA(page_to_nid(page))->pm_node!=0) {
++
++                int lru = page_lru(page);//page_lru_base_type(page);
++		int lru_base = page_lru_base_type(page);
++
++		del_page_from_lru_list(page, lruvec, lru);
++		ClearPageActive(page);
++                add_page_to_lru_list(page, lruvec, lru_base + LRU_PROMOTE);
++                wake_up_interruptible(&page_pgdat(page)->kpromoted_wait);
++        }
++#endif
++
+ }
+ 
+ #ifdef CONFIG_SMP
+@@ -306,7 +320,12 @@
+ void activate_page(struct page *page)
+ {
+ 	page = compound_head(page);
+-	if (PageLRU(page) && !PageActive(page) && !PageUnevictable(page)) {
++#ifdef CONFIG_MULTICLOCK
++        if (PageLRU(page) && !PageUnevictable(page))
++#else
++	if (PageLRU(page) && !PageActive(page) && !PageUnevictable(page)) 
++#endif	
++	{
+ 		struct pagevec *pvec = &get_cpu_var(activate_page_pvecs);
+ 
+ 		get_page(page);
+@@ -351,7 +370,16 @@
+ 		struct page *pagevec_page = pvec->pages[i];
+ 
+ 		if (pagevec_page == page) {
++
++#ifdef CONFIG_MULTICLOCK
++                        if (!PageActive(page))
++                                SetPageActive(page);
++                        else if(NODE_DATA(page_to_nid(page))->pm_node!=0)
++                                SetPagePromote(page);
++#else
++
+ 			SetPageActive(page);
++#endif
+ 			break;
+ 		}
+ 	}
+@@ -372,8 +400,12 @@
+ void mark_page_accessed(struct page *page)
+ {
+ 	page = compound_head(page);
+-	if (!PageActive(page) && !PageUnevictable(page) &&
+-			PageReferenced(page)) {
++#ifdef CONFIG_MULTICLOCK
++	if (!PageUnevictable(page) && PageReferenced(page))
++#else
++	if (!PageActive(page) && !PageUnevictable(page) && PageReferenced(page)) 
++#endif	
++	{
+ 
+ 		/*
+ 		 * If the page is on the LRU, queue it for activation via
+@@ -381,13 +413,15 @@
+ 		 * pagevec, mark it active and it'll be moved to the active
+ 		 * LRU on the next drain.
+ 		 */
+-		if (PageLRU(page))
++
++		if(PageLRU(page))
+ 			activate_page(page);
+ 		else
+ 			__lru_cache_activate_page(page);
+ 		ClearPageReferenced(page);
+ 		if (page_is_file_cache(page))
+ 			workingset_activation(page);
++		
+ 	} else if (!PageReferenced(page)) {
+ 		SetPageReferenced(page);
+ 	}
+@@ -865,12 +899,21 @@
+ static void __pagevec_lru_add_fn(struct page *page, struct lruvec *lruvec,
+ 				 void *arg)
+ {
+-	enum lru_list lru;
++	enum lru_list lru;// = page_lru(page);;
+ 	int was_unevictable = TestClearPageUnevictable(page);
+ 
++
++#ifdef CONFIG_MULTICLOCK
++        int promote = PagePromote(page);
++        int active = PageActive(page);
++#endif
++
+ 	VM_BUG_ON_PAGE(PageLRU(page), page);
+ 
+ 	SetPageLRU(page);
++
++	lru = page_lru(page);
++
+ 	/*
+ 	 * Page becomes evictable in two ways:
+ 	 * 1) Within LRU lock [munlock_vma_page() and __munlock_pagevec()].
+@@ -899,8 +942,17 @@
+ 	 */
+ 	smp_mb();
+ 
++#ifdef CONFIG_MULTICLOCK
++        if (promote && NODE_DATA(page_to_nid(page))->pm_node!=0) {
++                ClearPagePromote(page);
++                if (!PageUnevictable(page))
++                        lru = (active ? 1 : 2);
++        }
++#endif
++
++
+ 	if (page_evictable(page)) {
+-		lru = page_lru(page);
++		//lru = page_lru(page);
+ 		update_page_reclaim_stat(lruvec, page_is_file_cache(page),
+ 					 PageActive(page));
+ 		if (was_unevictable)
+@@ -915,6 +967,13 @@
+ 
+ 	add_page_to_lru_list(page, lruvec, lru);
+ 	trace_mm_lru_insertion(page, lru);
++
++#ifdef CONFIG_MULTICLOCK
++	if (promote && NODE_DATA(page_to_nid(page))->pm_node!=0)
++                wake_up_interruptible(&page_pgdat(page)->kpromoted_wait);
++#endif
++
++
+ }
+ 
+ /*
+diff -ur linux-5.3.1/mm/vmscan.c multi-clock/mm/vmscan.c
+--- linux-5.3.1/mm/vmscan.c	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/mm/vmscan.c	2021-12-17 13:47:44.096688669 -0500
+@@ -101,6 +101,11 @@
+ 	/* One of the zones is ready for compaction */
+ 	unsigned int compaction_ready:1;
+ 
++#ifdef CONFIG_MULTICLOCK
++        /* Searching for pages to promote */
++        unsigned int only_promote:1;
++#endif
++
+ 	/* Allocation order */
+ 	s8 order;
+ 
+@@ -192,6 +197,24 @@
+ static DEFINE_IDR(shrinker_idr);
+ static int shrinker_nr_max;
+ 
++
++#ifdef CONFIG_MULTICLOCK
++int pmem_node_id = -1;
++int set_pmem_node_id(int nid)
++{
++	
++        pmem_node_id = nid;
++	
++	return 0;
++}
++EXPORT_SYMBOL(set_pmem_node_id);
++int set_pmem_node(int nid)
++{
++	NODE_DATA(nid)->pm_node=1;
++	return 0;
++}
++#endif
++
+ static int prealloc_memcg_shrinker(struct shrinker *shrinker)
+ {
+ 	int id, ret = -ENOMEM;
+@@ -1280,6 +1303,12 @@
+ 			; /* try to reclaim the page below */
+ 		}
+ 
++#ifdef CONFIG_MULTICLOCK
++                if (sc->only_promote)
++                        goto keep_locked;
++#endif
++
++
+ 		/*
+ 		 * Anonymous process memory has backing store?
+ 		 * Try to allocate it some swap space here.
+@@ -1586,6 +1615,11 @@
+ 
+ 	ret = -EBUSY;
+ 
++#ifdef CONFIG_MULTICLOCK
++        if (!PageReferenced(page) && (mode & ISOLATE_PROMOTE))
++                return ret;
++#endif
++
+ 	/*
+ 	 * To minimise LRU disruption, the caller can indicate that it only
+ 	 * wants to isolate pages it will be able to operate on without
+@@ -1700,7 +1734,11 @@
+ 	while (scan < nr_to_scan && !list_empty(src)) {
+ 		struct page *page;
+ 
+-		page = lru_to_page(src);
++		if (sc->only_promote)
++                        page = lru_to_page_next(src);
++                else
++			page = lru_to_page(src);
++		
+ 		prefetchw_prev_lru_page(page, src, flags);
+ 
+ 		VM_BUG_ON_PAGE(!PageLRU(page), page);
+@@ -1900,6 +1938,14 @@
+ 		SetPageLRU(page);
+ 		lru = page_lru(page);
+ 
++#ifdef CONFIG_MULTICLOCK
++                if (is_promote_lru(lru))
++                        TestClearPageReferenced(page);
++		if(PagePromote(page))
++			__ClearPagePromote(page);
++#endif
++
++
+ 		nr_pages = hpage_nr_pages(page);
+ 		update_lru_size(lruvec, lru, page_zonenum(page), nr_pages);
+ 		list_move(&page->lru, &lruvec->lists[lru]);
+@@ -1942,6 +1988,20 @@
+ 		bdi_write_congested(current->backing_dev_info);
+ }
+ 
++#ifdef CONFIG_MULTICLOCK
++struct page* vmscan_alloc_pmem_page(struct  page *page, unsigned long data)
++{
++	gfp_t gfp_mask = GFP_USER | __GFP_PMEM;
++	//return alloc_pages_node(pmem_node_id, gfp_mask, 0);
++	return alloc_page(gfp_mask);
++}
++struct page* vmscan_alloc_normal_page(struct page *page, unsigned long data)
++{
++        gfp_t gfp_mask = GFP_USER;
++        return alloc_page(gfp_mask);
++}
++#endif
++
+ /*
+  * shrink_inactive_list() is a helper for shrink_node().  It returns the number
+  * of reclaimed pages
+@@ -1993,6 +2053,14 @@
+ 	if (nr_taken == 0)
+ 		return 0;
+ 
++#ifdef CONFIG_MULTICLOCK
++	if (pgdat->pm_node == 0) {
++		int ret = migrate_pages(&page_list, vmscan_alloc_pmem_page, NULL, 0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG);
++		nr_reclaimed = (ret >= 0 ? nr_taken - ret : 0);
++		__mod_node_page_state(pgdat, NR_DEMOTED, nr_reclaimed);
++	}
++#endif
++
+ 	nr_reclaimed = shrink_page_list(&page_list, pgdat, sc, 0,
+ 				&stat, false);
+ 
+@@ -2053,6 +2121,12 @@
+ 	LIST_HEAD(l_hold);	/* The pages which were snipped off */
+ 	LIST_HEAD(l_active);
+ 	LIST_HEAD(l_inactive);
++#ifdef CONFIG_MULTICLOCK
++        unsigned long nr_promote;
++	unsigned long pmem_page_sal=0;
++	unsigned long active_to_promote=0;
++        LIST_HEAD(l_promote);
++#endif
+ 	struct page *page;
+ 	struct zone_reclaim_stat *reclaim_stat = &lruvec->reclaim_stat;
+ 	unsigned nr_deactivate, nr_activate;
+@@ -2067,6 +2141,7 @@
+ 	nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &l_hold,
+ 				     &nr_scanned, sc, lru);
+ 
++
+ 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
+ 	reclaim_stat->recent_scanned[file] += nr_taken;
+ 
+@@ -2092,7 +2167,25 @@
+ 				unlock_page(page);
+ 			}
+ 		}
+-
++#ifdef CONFIG_MULTICLOCK
++                if (pgdat->pm_node != 0 )
++		{
++			pmem_page_sal++;
++			if (page_referenced(page, 0, sc->target_mem_cgroup,
++                                    &vm_flags))
++			{
++				SetPagePromote(page);
++                        	list_add(&page->lru, &l_promote);
++				active_to_promote++;
++                        	continue;
++                	}
++		}
++
++                if (sc->only_promote) {
++                        list_add(&page->lru, &l_active);
++                        continue;
++                }
++#endif
+ 		if (page_referenced(page, 0, sc->target_mem_cgroup,
+ 				    &vm_flags)) {
+ 			nr_rotated += hpage_nr_pages(page);
+@@ -2115,7 +2208,6 @@
+ 		SetPageWorkingset(page);
+ 		list_add(&page->lru, &l_inactive);
+ 	}
+-
+ 	/*
+ 	 * Move pages back to the lru list.
+ 	 */
+@@ -2129,8 +2221,12 @@
+ 	reclaim_stat->recent_rotated[file] += nr_rotated;
+ 
+ 	nr_activate = move_pages_to_lru(lruvec, &l_active);
++#ifdef CONFIG_MULTICLOCK
++        nr_promote = move_pages_to_lru(lruvec, &l_promote);
++#endif	
+ 	nr_deactivate = move_pages_to_lru(lruvec, &l_inactive);
+ 	/* Keep all free pages in l_active list */
++
+ 	list_splice(&l_inactive, &l_active);
+ 
+ 	__count_vm_events(PGDEACTIVATE, nr_deactivate);
+@@ -2145,6 +2241,65 @@
+ 			nr_deactivate, nr_rotated, sc->priority, file);
+ }
+ 
++#ifdef CONFIG_MULTICLOCK
++static noinline_for_stack unsigned long
++shrink_promote_list(unsigned long nr_to_scan,
++                               struct lruvec *lruvec,
++                               struct scan_control *sc,
++                               enum lru_list lru)
++{
++
++        unsigned long nr_taken;
++        unsigned long nr_scanned;
++        unsigned long nr_migrated = 0;
++        LIST_HEAD(l_hold);
++        //LIST_HEAD(l_free);
++        isolate_mode_t isolate_mode = 0;
++        int file = is_file_lru(lru);
++        struct pglist_data *pgdat = lruvec_pgdat(lruvec);
++
++        lru_add_drain();
++
++        if (!sc->may_unmap)
++                isolate_mode |= ISOLATE_UNMAPPED;
++
++        spin_lock_irq(&pgdat->lru_lock);
++
++        nr_taken = isolate_lru_pages(nr_to_scan, lruvec, &l_hold,
++                                     &nr_scanned, sc, lru);
++
++
++        __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
++        spin_unlock_irq(&pgdat->lru_lock);
++
++        if (nr_taken) {
++                int ret = migrate_pages(&l_hold, vmscan_alloc_normal_page,
++                                NULL, 0, MIGRATE_SYNC, MR_MEMORY_HOTPLUG);
++                nr_migrated = (ret < 0 ? 0 : nr_taken - ret);
++                __mod_node_page_state(pgdat, NR_PROMOTED, nr_migrated);
++
++        }
++
++
++        spin_lock_irq(&pgdat->lru_lock);
++
++        move_pages_to_lru(lruvec, &l_hold);
++        __mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
++        spin_unlock_irq(&pgdat->lru_lock);
++
++        mem_cgroup_uncharge_list(&l_hold);
++        free_unref_page_list(&l_hold);
++
++        return nr_migrated;
++        
++}
++#endif
++
++
++
++
++
++
+ /*
+  * The inactive anon list should be small enough that the VM never has
+  * to do too much work.
+@@ -2179,6 +2334,10 @@
+ 	enum lru_list active_lru = file * LRU_FILE + LRU_ACTIVE;
+ 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
+ 	enum lru_list inactive_lru = file * LRU_FILE;
++#ifdef CONFIG_MULTICLOCK
++	enum lru_list promote_lru = file * LRU_FILE + LRU_ACTIVE + LRU_PROMOTE;
++	unsigned long promote;
++#endif
+ 	unsigned long inactive, active;
+ 	unsigned long inactive_ratio;
+ 	unsigned long refaults;
+@@ -2193,6 +2352,9 @@
+ 
+ 	inactive = lruvec_lru_size(lruvec, inactive_lru, sc->reclaim_idx);
+ 	active = lruvec_lru_size(lruvec, active_lru, sc->reclaim_idx);
++#ifdef CONFIG_MULTICLOCK
++	promote = lruvec_lru_size(lruvec, promote_lru, sc->reclaim_idx);
++#endif
+ 
+ 	/*
+ 	 * When refaults are being observed, it means a new workingset
+@@ -2203,7 +2365,11 @@
+ 	if (file && lruvec->refaults != refaults) {
+ 		inactive_ratio = 0;
+ 	} else {
++#ifdef CONFIG_MULTICLOCK
++		gb = (inactive + active + promote) >> (30 - PAGE_SHIFT);
++#else
+ 		gb = (inactive + active) >> (30 - PAGE_SHIFT);
++#endif
+ 		if (gb)
+ 			inactive_ratio = int_sqrt(10 * gb);
+ 		else
+@@ -2223,10 +2389,26 @@
+ 				 struct lruvec *lruvec, struct scan_control *sc)
+ {
+ 	if (is_active_lru(lru)) {
+-		if (inactive_list_is_low(lruvec, is_file_lru(lru), sc, true))
++#ifdef CONFIG_MULTICLOCK
++                if (inactive_list_is_low(lruvec, is_file_lru(lru), sc, true) || sc->only_promote)
++		{
+ 			shrink_active_list(nr_to_scan, lruvec, sc, lru);
+-		return 0;
+-	}
++
++		}
++#else
++                if (inactive_list_is_low(lruvec, is_file_lru(lru), sc, true))
++
++		{
++                        shrink_active_list(nr_to_scan, lruvec, sc, lru);
++		}
++#endif
++                return 0;
++        }
++#ifdef CONFIG_MULTICLOCK
++        else if (is_promote_lru(lru)) {
++                return shrink_promote_list(nr_to_scan, lruvec, sc, lru);
++        }
++#endif
+ 
+ 	return shrink_inactive_list(nr_to_scan, lruvec, sc, lru);
+ }
+@@ -3929,6 +4111,158 @@
+ 	wake_up_interruptible(&pgdat->kswapd_wait);
+ }
+ 
++
++#ifdef CONFIG_MULTICLOCK
++static void kpromoted_try_to_sleep(pg_data_t *pgdat)
++{
++	DEFINE_WAIT(wait);
++
++	if (freezing(current) || kthread_should_stop())
++		return;
++
++	prepare_to_wait(&pgdat->kpromoted_wait, &wait, TASK_INTERRUPTIBLE);
++	if (!kthread_should_stop())
++		schedule_timeout(HZ);
++	finish_wait(&pgdat->kpromoted_wait, &wait);
++}
++
++static void scan_node(pg_data_t *pgdat, struct scan_control *sc)
++{
++        struct reclaim_state *reclaim_state = current->reclaim_state;
++        unsigned long nr_reclaimed, nr_scanned;
++        bool reclaimable = false;
++        enum lru_list lru;
++        struct page *page;
++        struct page *page2;
++        int mem_cg_cnt=0;
++        unsigned long total_scan;
++
++        struct mem_cgroup *root = sc->target_mem_cgroup;
++                struct mem_cgroup_reclaim_cookie reclaim = {
++                        .pgdat = pgdat,
++                        .priority = sc->priority,
++                };
++        unsigned long node_lru_pages = 0;
++        struct mem_cgroup *memcg;
++
++        memset(&sc->nr, 0, sizeof(sc->nr));
++
++        nr_reclaimed = sc->nr_reclaimed;
++        nr_scanned = sc->nr_scanned;
++
++        memcg = mem_cgroup_iter(root, NULL, &reclaim);
++
++        do {
++                unsigned long lru_pages;
++                unsigned long reclaimed;
++                unsigned long scanned;
++                mem_cg_cnt++;
++
++                switch (mem_cgroup_protected(root, memcg)) {
++                case MEMCG_PROT_MIN:
++                /*
++                         * Hard protection.
++                         * If there is no reclaimable memory, OOM.
++                         */
++                        continue;
++                case MEMCG_PROT_LOW:
++                        /*
++                         * Soft protection.
++                         * Respect the protection only as long as
++                         * there is an unprotected supply
++                         * of reclaimable memory from other cgroups.
++                         */
++                        if (!sc->memcg_low_reclaim) {
++                                sc->memcg_low_skipped = 1;
++                                continue;
++                        }
++                        memcg_memory_event(memcg, MEMCG_LOW);
++                        break;
++                case MEMCG_PROT_NONE:
++                        break;
++                }
++
++                reclaimed = sc->nr_reclaimed;
++                scanned = sc->nr_scanned;
++                struct lruvec *lruvec = mem_cgroup_lruvec(pgdat, memcg);
++                for_each_evictable_lru(lru)
++        	{
++	            unsigned long nr_to_scan = 1024;
++                    shrink_list(lru, nr_to_scan, lruvec, sc);
++        	}
++
++        } while ((memcg = mem_cgroup_iter(root, memcg, &reclaim)));
++
++}
++
++static int kpromoted(void *p)
++{
++        int lru;
++        pg_data_t *pgdat = (pg_data_t*)p;
++        struct task_struct *tsk = current;
++        struct mem_cgroup_reclaim_cookie reclaim = {
++                        .pgdat = pgdat,
++                        .priority = DEF_PRIORITY,
++                };
++
++        struct reclaim_state reclaim_state = {
++                .reclaimed_slab = 0,
++        };
++        struct mem_cgroup *root = NULL;
++        struct mem_cgroup *memcg = mem_cgroup_iter(root, NULL, &reclaim);
++        struct lruvec *lruvec = mem_cgroup_lruvec(pgdat, memcg);
++        struct zone *zone = &pgdat->node_zones[ZONE_NORMAL];
++	const struct cpumask *cpumask = cpumask_of_node(pgdat->node_id);
++
++        struct scan_control sc = {
++                .nr_to_reclaim = SWAP_CLUSTER_MAX,
++                //.gfp_mask = (gfp_mask = memalloc_noio_flags(gfp_mask)),
++                //.order = order,
++                //.nodemask = nodemask,
++                .priority = DEF_PRIORITY,
++                .may_writepage = !laptop_mode,
++                .may_unmap = 1,
++                .may_swap = 1,
++                .only_promote = 1,
++		.reclaim_idx = MAX_NR_ZONES - 1,
++		.target_mem_cgroup = memcg,
++        };
++
++        if (!cpumask_empty(cpumask))
++                set_cpus_allowed_ptr(tsk, cpumask);
++        current->reclaim_state = &reclaim_state;
++
++        tsk->flags |= PF_MEMALLOC | PF_SWAPWRITE | PF_KSWAPD;
++
++        /*if(pmem_node_id!=-1 && pgdat->node_id!=pmem_node_id)
++                return 0;*/
++
++        for ( ; ; ) {
++		
++		scan_node(pgdat, &sc);
++                
++
++sleep:
++
++                if (kthread_should_stop())
++                        break;
++
++                kpromoted_try_to_sleep(pgdat);
++
++
++        }
++
++        tsk->flags &= ~(PF_MEMALLOC | PF_SWAPWRITE | PF_KSWAPD);
++        current->reclaim_state = NULL;
++
++        return 0;
++
++
++}
++#endif
++
++
++
+ #ifdef CONFIG_HIBERNATION
+ /*
+  * Try to free `nr_to_reclaim' of memory, system-wide, and return the number of
+@@ -4009,6 +4343,21 @@
+ 		ret = PTR_ERR(pgdat->kswapd);
+ 		pgdat->kswapd = NULL;
+ 	}
++
++#ifdef CONFIG_MULTICLOCK
++	if (pgdat->kpromoted || pmem_node_id==-1 || nid !=pmem_node_id)
++		return ret;
++
++	pgdat->kswapd = kthread_run(kpromoted, pgdat, "kpromoted%d", nid);
++	
++	if (IS_ERR(pgdat->kpromoted)) {
++                /* failure at boot is fatal */
++                BUG_ON(system_state < SYSTEM_RUNNING);
++                pr_err("Failed to start kpromoted on node %d\n", nid);
++                ret = PTR_ERR(pgdat->kpromoted);
++                pgdat->kpromoted = NULL;
++        }
++#endif
+ 	return ret;
+ }
+ 
+@@ -4019,11 +4368,21 @@
+ void kswapd_stop(int nid)
+ {
+ 	struct task_struct *kswapd = NODE_DATA(nid)->kswapd;
++#ifdef CONFIG_MULTICLOCK
++	struct task_struct *kpromoted = NODE_DATA(nid)->kpromoted;
++#endif
+ 
+ 	if (kswapd) {
+ 		kthread_stop(kswapd);
+ 		NODE_DATA(nid)->kswapd = NULL;
+ 	}
++
++#ifdef CONFIG_MULTICLOCK	
++	if (kpromoted) {
++		kthread_stop(kpromoted);
++		NODE_DATA(nid)->kpromoted = NULL;
++	}
++#endif
+ }
+ 
+ static int __init kswapd_init(void)
+@@ -4031,8 +4390,13 @@
+ 	int nid, ret;
+ 
+ 	swap_setup();
+-	for_each_node_state(nid, N_MEMORY)
+- 		kswapd_run(nid);
++	for_each_node_state(nid, N_MEMORY){
++#ifdef CONFIG_MULTICLOCK
++		if(pmem_node_id!=-1 && nid!=pmem_node_id)
++			continue;
++#endif
++		kswapd_run(nid);
++	}
+ 	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
+ 					"mm/vmscan:online", kswapd_cpu_online,
+ 					NULL);
+diff -ur linux-5.3.1/mm/vmstat.c multi-clock/mm/vmstat.c
+--- linux-5.3.1/mm/vmstat.c	2019-09-21 01:19:47.000000000 -0400
++++ multi-clock/mm/vmstat.c	2021-12-17 13:47:44.096688669 -0500
+@@ -1111,8 +1111,14 @@
+ 	"nr_free_pages",
+ 	"nr_zone_inactive_anon",
+ 	"nr_zone_active_anon",
++#ifdef CONFIG_MULTICLOCK
++	"nr_zone_promote_anon",
++#endif
+ 	"nr_zone_inactive_file",
+ 	"nr_zone_active_file",
++#ifdef CONFIG_MULTICLOCK
++	"nr_zone_promote_file",
++#endif
+ 	"nr_zone_unevictable",
+ 	"nr_zone_write_pending",
+ 	"nr_mlock",
+@@ -1137,8 +1143,14 @@
+ 	/* Node-based counters */
+ 	"nr_inactive_anon",
+ 	"nr_active_anon",
++#ifdef CONFIG_MULTICLOCK
++	"nr_promote_anon",
++#endif
+ 	"nr_inactive_file",
+ 	"nr_active_file",
++#ifdef CONFIG_MULTICLOCK
++	"nr_promote_file",
++#endif
+ 	"nr_unevictable",
+ 	"nr_slab_reclaimable",
+ 	"nr_slab_unreclaimable",
+@@ -1164,6 +1176,10 @@
+ 	"nr_vmscan_immediate_reclaim",
+ 	"nr_dirtied",
+ 	"nr_written",
++#ifdef CONFIG_MULTICLOCK
++	"nr_demoted",
++	"nr_promoted",
++#endif
+ 	"nr_kernel_misc_reclaimable",
+ 
+ 	/* enum writeback_stat_item counters */
+Only in linux-5.3.1/net/wireless: certs
+Only in linux-5.3.1/scripts: Makefile.lib
+Only in linux-5.3.1/scripts: Makefile.modbuiltin
+Only in linux-5.3.1/scripts: Makefile.modinst
+Only in linux-5.3.1/scripts: Makefile.modpost
+Only in linux-5.3.1/scripts: Makefile.modsign
+Only in linux-5.3.1/tools/lib/bpf: libbpf.map
+Only in linux-5.3.1/tools/testing/selftests/ftrace: test.d
+Only in linux-5.3.1/tools/testing/selftests/tc-testing: plugins
