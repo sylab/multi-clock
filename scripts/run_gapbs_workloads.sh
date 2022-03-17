@@ -5,7 +5,7 @@ gapbs/pr -g 30 -n 5 > pr.out
 sleep 100
 gapbs/sssp -g 29 -n 5 > sssp.out
 sleep 100
-gapbs/tc -g 30 -n 5 > tc.out
+gapbs/tc -g 29 -n 5 > tc.out
 sleep 100
 gapbs/bc -g 30 -n 5 > bc.out
 sleep 100
