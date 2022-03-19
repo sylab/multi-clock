@@ -11,7 +11,7 @@ Memory Management options:
   - `Device memory (pmem, HMM, etc...) hotplug support`
   - `Enable Multi-Clock for Tiered Memory System` 
 
-Device Drivers
+Device Drivers:
   - `NVDIMM (Non-Volatile Memory Device) Support  --->`
     - `NVDIMM DAX: Raw access to persistent memory`
   - `DAX: direct access to differentiated memory  --->`
