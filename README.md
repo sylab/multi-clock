@@ -1,19 +1,24 @@
-# Compile the kernel
+# How to compile the kernel
 
-Use `make menuconfig` and enable `Enable Multi-Clock for Tiered Memory System` to compile the MULTI-CLOCK kernel.
+Once inside of ./src/, use the command `make menuconfig`.
 
-Following are the other required configurations need to be eanbled for MULTI-CLOCK:
+Following are the required configurations that need to be enabled for MULTI-CLOCK:
 
-- `allow for memory hot-add`
-- `Device memory (pmem, HMM, etc...) hotplug support`
-- `NVDIMM (Non-Volatile Memory Device) Support  --->`
-  - `NVDIMM DAX: Raw access to persistent memory`
-- `DAX: direct access to differentiated memory  --->`
-  - `Device DAX: direct access mapping device`
-  - `PMEM DAX: direct access to persistent memory`
-  - `KMEM DAX: volatile-use of persistent memory`
+Memory Management options:
+  - `allow for memory hot-add`
+  - `Allow for memory hot remove`
+  - `Transparent Hugepage Support`
+  - `Device memory (pmem, HMM, etc...) hotplug support`
+  - `Enable Multi-Clock for Tiered Memory System`
+Device Drivers
+  - `NVDIMM (Non-Volatile Memory Device) Support  --->`
+    - `NVDIMM DAX: Raw access to persistent memory`
+  - `DAX: direct access to differentiated memory  --->`
+    - `Device DAX: direct access mapping device`
+    - `PMEM DAX: direct access to persistent memory`
+    - `KMEM DAX: volatile-use of persistent memory`
 
-Now, build and install the kernel using `make && make modules_install && make install`
+Save the configuration and exit. Now, build and install the kernel using the command `make && make modules_install && make install`.
 
 # Install required packages
 
