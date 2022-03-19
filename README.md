@@ -1,8 +1,6 @@
 # How to compile the kernel
 
-Once inside of ./src/, use the command `make menuconfig`.
-
-Following are the required configurations that need to be enabled for MULTI-CLOCK:
+Once inside of ./src/, use the command `make menuconfig`. Following are the required configurations that need to be enabled for MULTI-CLOCK:
 
 Memory Management options:
   - `allow for memory hot-add`
