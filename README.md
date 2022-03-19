@@ -10,7 +10,7 @@ Memory Management options:
   - `Transparent Hugepage Support`
   - `Device memory (pmem, HMM, etc...) hotplug support`
   - `Enable Multi-Clock for Tiered Memory System` 
-<ul />
+
 Device Drivers
   - `NVDIMM (Non-Volatile Memory Device) Support  --->`
     - `NVDIMM DAX: Raw access to persistent memory`
