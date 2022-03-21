@@ -179,6 +179,26 @@ unsigned long vm_total_pages;
 static LIST_HEAD(shrinker_list);
 static DECLARE_RWSEM(shrinker_rwsem);
 
+
+#ifdef CONFIG_MULTICLOCK
+int pmem_node_id = -1;
+int set_pmem_node_id(int nid)
+{
+
+        pmem_node_id = nid;
+
+        return 0;
+}
+EXPORT_SYMBOL(set_pmem_node_id);
+int set_pmem_node(int nid)
+{
+        NODE_DATA(nid)->pm_node=1;
+        return 0;
+}
+#endif
+
+
+
 #ifdef CONFIG_MEMCG_KMEM
 
 /*
@@ -196,24 +216,6 @@ static DECLARE_RWSEM(shrinker_rwsem);
 
 static DEFINE_IDR(shrinker_idr);
 static int shrinker_nr_max;
-
-
-#ifdef CONFIG_MULTICLOCK
-int pmem_node_id = -1;
-int set_pmem_node_id(int nid)
-{
-	
-        pmem_node_id = nid;
-	
-	return 0;
-}
-EXPORT_SYMBOL(set_pmem_node_id);
-int set_pmem_node(int nid)
-{
-	NODE_DATA(nid)->pm_node=1;
-	return 0;
-}
-#endif
 
 static int prealloc_memcg_shrinker(struct shrinker *shrinker)
 {
